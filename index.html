@@ -1,0 +1,454 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>Globus Cargo</title>
+<style>
+  html, body { margin: 0; padding: 0; }
+  body { background: #f8fafc; color: #0f172a; font-family: Arial, Helvetica, sans-serif; font-size: 16px; line-height: 1.4; }
+  .wrap { max-width: 440px; margin: 0 auto; padding: 12px; }
+  .head { margin: 4px 0 12px 0; font-size: 14px; color: #94a3b8; }
+  .head b { color: #0e5e99; }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 14px; }
+  label.lbl { display: block; margin: 12px 0 6px 0; font-size: 14px; font-weight: bold; color: #334155; }
+  label.lbl.first { margin-top: 0; }
+  input[type=text], input[type=tel], input[type=email], select, textarea {
+    display: block; width: 100%; box-sizing: border-box; -moz-box-sizing: border-box; -webkit-box-sizing: border-box;
+    margin: 0; padding: 11px 12px; font-size: 16px; font-family: inherit; color: #0f172a;
+    background: #fff; border: 1px solid #cbd5e1; border-radius: 10px;
+  }
+  textarea { height: 84px; resize: none; }
+  input:focus, select:focus, textarea:focus { outline: none; border-color: #1789c4; }
+  .file { display: block; margin-top: 12px; padding: 10px 12px; border: 1px dashed #cbd5e1; border-radius: 10px; background: #f8fafc; color: #64748b; font-size: 14px; }
+  .file input { display: block; width: 100%; margin-top: 6px; font-size: 14px; }
+  .consent { margin-top: 12px; font-size: 14px; color: #64748b; }
+  .consent input { float: left; width: 18px; height: 18px; margin: 2px 10px 0 0; }
+  .consent span { display: block; overflow: hidden; }
+  .error { display: none; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #fef2f2; color: #b91c1c; font-size: 14px; }
+  button.send { display: block; width: 100%; margin-top: 14px; padding: 14px 12px; font-size: 16px; font-weight: bold; color: #fff; background: #0e5e99; border: 0; border-radius: 12px; cursor: pointer; }
+  button.send[disabled] { opacity: 0.6; }
+  .ok { display: none; padding: 28px 16px; text-align: center; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; }
+  .ok h2 { margin: 0 0 8px 0; font-size: 20px; color: #0f172a; }
+  .ok p { margin: 0; font-size: 14px; color: #64748b; }
+  .ok .tick { margin: 0 auto 10px auto; width: 44px; height: 44px; line-height: 44px; border-radius: 22px; background: #dcfce7; color: #16a34a; font-size: 26px; font-weight: bold; }
+  .fatal { padding: 16px; font-size: 14px; color: #0f172a; }
+  .fatal pre { white-space: pre-wrap; word-wrap: break-word; font-size: 12px; color: #b91c1c; }
+</style>
+<script>
+// Показываем текст ошибки, если страница не смогла запуститься (диагностика на старых WebView).
+window.onerror = function (message, source, line) {
+  var box = document.getElementById('fatal');
+  if (!box) { return; }
+  box.style.display = 'block';
+  box.appendChild(document.createTextNode(String(message) + (line ? ' (строка ' + line + ')' : '') + '\n'));
+};
+</script>
+</head>
+<body>
+<div class="wrap">
+  <div class="head"><b>Globus Cargo</b> — <span id="t-title">Отправить заявку</span></div>
+
+  <div id="success" class="ok">
+    <div class="tick">&#10003;</div>
+    <h2 id="t-ok-title">Заявка отправлена</h2>
+    <p id="t-ok-text">Спасибо! Менеджер свяжется с вами по телефону или Email.</p>
+  </div>
+
+  <form id="form" class="card" action="#" novalidate="novalidate">
+    <label class="lbl first" for="f-name" id="t-name">Имя *</label>
+    <input id="f-name" type="text" name="name" autocomplete="name">
+
+    <label class="lbl" for="f-phone" id="t-phone">Телефон *</label>
+    <input id="f-phone" type="tel" name="phone" autocomplete="tel" placeholder="+7(912)345-67-89">
+
+    <label class="lbl" for="f-email" id="t-email">Email</label>
+    <input id="f-email" type="email" name="email" autocomplete="email" placeholder="name@company.ru">
+
+    <label class="lbl" for="f-service" id="t-service">Тип услуги</label>
+    <select id="f-service" name="service_type"></select>
+
+    <label class="lbl" for="f-message" id="t-message">Комментарий или запрос</label>
+    <textarea id="f-message" name="message"></textarea>
+
+    <label class="file" id="file-box"><span id="t-file">Прикрепить документы для ВЭД</span>
+      <input id="f-file" type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx,.xls,.xlsx">
+    </label>
+
+    <label class="consent"><input id="f-consent" type="checkbox"><span id="t-consent">Согласен на обработку персональных данных и получение ответа по заявке.</span></label>
+
+    <div id="error" class="error"></div>
+    <button id="send" type="submit" class="send">Отправить заявку</button>
+  </form>
+
+  <noscript><div class="fatal">Для работы формы включите JavaScript.</div></noscript>
+  <div id="fatal" class="fatal" style="display:none"></div>
+</div>
+
+<script>
+(function () {
+  var API_URL = 'https://api.globuscargo.net/sendmail.php';
+  var WP_SERVICES_URL = 'https://api.globuscargo.net/wp-json/wp/v2/posts?categories=4&per_page=100&_fields=title,acf';
+  var TIMEOUT_MS = 45000;
+  var MAX_FILE = 10 * 1024 * 1024;
+  var FILE_EXT = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx', 'xls', 'xlsx'];
+
+  var TEXT = {
+    ru: {
+      title: 'Отправить заявку',
+      name: 'Имя *', phone: 'Телефон *', email: 'Email', service: 'Тип услуги', message: 'Комментарий или запрос',
+      namePh: 'Ваше имя', messagePh: 'Откуда и куда везём, что за груз, сроки и объём',
+      file: 'Прикрепить документы для ВЭД',
+      consent: 'Согласен на обработку персональных данных и получение ответа по заявке.',
+      submit: 'Отправить заявку', sending: 'Идёт отправка…',
+      nameErr: 'Введите имя.',
+      phoneErr: 'Введите телефон в формате +7(912)345-67-89.',
+      consentErr: 'Подтвердите согласие на обработку персональных данных.',
+      fileErr: 'Файл должен быть PDF, JPG, PNG, DOC или XLS размером до 10 МБ.',
+      err: 'Не удалось отправить заявку. Попробуйте ещё раз или позвоните нам.',
+      okTitle: 'Заявка отправлена', okText: 'Спасибо! Менеджер свяжется с вами по телефону или Email.'
+    },
+    en: {
+      title: 'Send a request',
+      name: 'Name *', phone: 'Phone *', email: 'Email', service: 'Service type', message: 'Comment or request',
+      namePh: 'Your name', messagePh: 'From and to where, what cargo, timeline and volume',
+      file: 'Attach foreign-trade documents',
+      consent: 'I agree to the processing of personal data and to receiving a response to my request.',
+      submit: 'Send request', sending: 'Sending…',
+      nameErr: 'Enter your name.',
+      phoneErr: 'Enter the phone number in the format +7(912)345-67-89.',
+      consentErr: 'Please confirm your consent to personal data processing.',
+      fileErr: 'The file must be PDF, JPG, PNG, DOC or XLS up to 10 MB.',
+      err: 'Could not send the request. Please try again or call us.',
+      okTitle: 'Request sent', okText: 'Thank you! A manager will contact you by phone or email.'
+    }
+  };
+
+  // Встроенный список услуг: работает без сети. Совпадает с cargoServices в src/lib/cargoData.ts.
+  var DEFAULT_SERVICES = [
+    { ru: 'Таможенное оформление', en: 'Customs clearance' },
+    { ru: 'Морские перевозки', en: 'Sea freight' },
+    { ru: 'Железнодорожные перевозки', en: 'Rail freight' },
+    { ru: 'Автомобильные перевозки', en: 'Road freight' },
+    { ru: 'Складская логистика', en: 'Warehousing' },
+    { ru: 'Консалтинг ВЭД', en: 'Foreign-trade consulting' }
+  ];
+
+  function $(id) { return document.getElementById(id); }
+
+  function setText(el, text) {
+    if (!el) { return; }
+    while (el.firstChild) { el.removeChild(el.firstChild); }
+    el.appendChild(document.createTextNode(text));
+  }
+
+  // ---------- язык ----------
+  function detectLang() {
+    var m = /[?&]lang=(ru|en)/.exec(window.location.search);
+    if (m) { return m[1]; }
+    try {
+      var tg = window.Telegram && window.Telegram.WebApp;
+      var code = tg && tg.initDataUnsafe && tg.initDataUnsafe.user && tg.initDataUnsafe.user.language_code;
+      if (code) { return String(code).toLowerCase().indexOf('ru') === 0 ? 'ru' : 'en'; }
+    } catch (e) { /* ignore */ }
+    return 'ru';
+  }
+
+  var lang = detectLang();
+  var T = TEXT[lang];
+  var services = [];
+  var i;
+  for (i = 0; i < DEFAULT_SERVICES.length; i++) { services.push(DEFAULT_SERVICES[i][lang]); }
+
+  // ---------- тексты ----------
+  function applyTexts() {
+    document.documentElement.lang = lang;
+    setText($('t-title'), T.title);
+    setText($('t-name'), T.name);
+    setText($('t-phone'), T.phone);
+    setText($('t-email'), T.email);
+    setText($('t-service'), T.service);
+    setText($('t-message'), T.message);
+    setText($('t-file'), T.file);
+    setText($('t-consent'), T.consent);
+    setText($('t-ok-title'), T.okTitle);
+    setText($('t-ok-text'), T.okText);
+    $('f-name').setAttribute('placeholder', T.namePh);
+    $('f-message').setAttribute('placeholder', T.messagePh);
+    setSendLabel(false);
+  }
+
+  function setSendLabel(sending) {
+    setText($('send'), sending ? T.sending : T.submit);
+  }
+
+  // ---------- список услуг ----------
+  function renderServices(selected) {
+    var select = $('f-service');
+    while (select.firstChild) { select.removeChild(select.firstChild); }
+    var found = false;
+    var k, opt;
+    for (k = 0; k < services.length; k++) {
+      opt = document.createElement('option');
+      opt.value = services[k];
+      opt.appendChild(document.createTextNode(services[k]));
+      if (services[k] === selected) { opt.selected = true; found = true; }
+      select.appendChild(opt);
+    }
+    if (!found && services.length) { select.selectedIndex = 0; }
+  }
+
+  function decodeHtml(value) {
+    var box = document.createElement('textarea');
+    box.innerHTML = value;
+    return box.value;
+  }
+
+  function loadServicesFromWp() {
+    if (!window.XMLHttpRequest) { return; }
+    var xhr = new XMLHttpRequest();
+    var finished = false;
+    var timer = setTimeout(function () {
+      if (!finished) { finished = true; try { xhr.abort(); } catch (e) { /* ignore */ } }
+    }, 8000);
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4 || finished) { return; }
+      finished = true;
+      clearTimeout(timer);
+      if (xhr.status !== 200) { return; }
+      try {
+        var posts = JSON.parse(xhr.responseText);
+        var items = [];
+        var n, post, acf, title;
+        for (n = 0; n < posts.length; n++) {
+          post = posts[n];
+          acf = (post.acf && typeof post.acf === 'object' && !(post.acf instanceof Array)) ? post.acf : {};
+          title = decodeHtml(post.title && post.title.rendered ? post.title.rendered : '');
+          if (lang === 'en') { title = acf.title_en || title; }
+          if (title) { items.push({ title: title, order: parseInt(acf.sort_order, 10) || 999 }); }
+        }
+        if (!items.length) { return; }
+        items.sort(function (a, b) { return a.order - b.order; });
+        var list = [];
+        for (n = 0; n < items.length; n++) { list.push(items[n].title); }
+        var select = $('f-service');
+        var current = select.options.length ? select.options[select.selectedIndex].value : '';
+        services = list;
+        renderServices(current);
+      } catch (e) { /* оставляем встроенный список */ }
+    };
+    try {
+      xhr.open('GET', WP_SERVICES_URL, true);
+      xhr.send(null);
+    } catch (e) { finished = true; clearTimeout(timer); }
+  }
+
+  // ---------- маска телефона: +7(912)345-67-89 ----------
+  function formatPhone(raw) {
+    var digits = String(raw).replace(/\D/g, '').substring(0, 11);
+    if (!digits) { return ''; }
+    var result = '+' + digits.substring(0, 1);
+    var area = digits.substring(1, 4);
+    var first = digits.substring(4, 7);
+    var second = digits.substring(7, 9);
+    var third = digits.substring(9, 11);
+    if (area) { result += '(' + area; }
+    if (digits.length >= 4) { result += ')'; }
+    if (first) { result += first; }
+    if (second) { result += '-' + second; }
+    if (third) { result += '-' + third; }
+    return result;
+  }
+
+  var phoneEl = $('f-phone');
+  var prevPhone = '';
+  function onPhoneInput() {
+    var raw = phoneEl.value;
+    var next = formatPhone(raw);
+    // Backspace по разделителю не меняет цифры — удаляем последнюю цифру, чтобы поле не «залипало».
+    if (raw.length < prevPhone.length && next === prevPhone) {
+      next = formatPhone(raw.replace(/\D/g, '').slice(0, -1));
+    }
+    if (next !== raw) { phoneEl.value = next; }
+    prevPhone = next;
+  }
+  if (phoneEl.addEventListener) {
+    phoneEl.addEventListener('input', onPhoneInput, false);
+  } else {
+    phoneEl.onkeyup = onPhoneInput;
+  }
+
+  // ---------- файл ----------
+  var fileEl = $('f-file');
+  (function hideFileIfUnsupported() {
+    var probe = document.createElement('input');
+    probe.setAttribute('type', 'file');
+    if (probe.type !== 'file' || !window.FormData) { $('file-box').style.display = 'none'; }
+  })();
+
+  function fileOk(file) {
+    if (!file) { return true; }
+    if (typeof file.size === 'number' && file.size > MAX_FILE) { return false; }
+    var name = String(file.name || '').toLowerCase();
+    var ext = name.indexOf('.') >= 0 ? name.substring(name.lastIndexOf('.') + 1) : '';
+    var k;
+    for (k = 0; k < FILE_EXT.length; k++) { if (FILE_EXT[k] === ext) { return true; } }
+    return false;
+  }
+
+  if (fileEl.addEventListener) {
+    fileEl.addEventListener('change', function () {
+      var file = fileEl.files && fileEl.files[0];
+      setText($('t-file'), file ? file.name : T.file);
+    }, false);
+  }
+
+  // ---------- ошибки ----------
+  function showError(message) {
+    var box = $('error');
+    setText(box, message);
+    box.style.display = message ? 'block' : 'none';
+  }
+
+  // ---------- отправка ----------
+  var sending = false;
+
+  function trim(value) { return String(value).replace(/^\s+|\s+$/g, ''); }
+
+  function setSending(value) {
+    sending = value;
+    $('send').disabled = value;
+    setSendLabel(value);
+  }
+
+  function onSuccess() {
+    $('form').style.display = 'none';
+    $('success').style.display = 'block';
+  }
+
+  function submit() {
+    if (sending) { return; }
+    showError('');
+
+    var name = trim($('f-name').value);
+    var phone = trim(phoneEl.value);
+    var email = trim($('f-email').value);
+    var service = $('f-service').value;
+    var message = trim($('f-message').value);
+    var file = fileEl.files && fileEl.files[0] ? fileEl.files[0] : null;
+
+    if (!name) { showError(T.nameErr); return; }
+    if (!/^\+\d\(\d{3}\)\d{3}-\d{2}-\d{2}$/.test(phone)) { showError(T.phoneErr); return; }
+    if (!$('f-consent').checked) { showError(T.consentErr); return; }
+    if (!fileOk(file)) { showError(T.fileErr); return; }
+    if (!window.XMLHttpRequest) { showError(T.err); return; }
+
+    var body;
+    var xhr = new XMLHttpRequest();
+    var useForm = !!window.FormData;
+    if (useForm) {
+      body = new FormData();
+      body.append('name', name);
+      body.append('phone', phone);
+      body.append('email', email);
+      body.append('service_type', service);
+      body.append('message', message);
+      if (file) { body.append('attachment', file); }
+    } else {
+      body = 'name=' + encodeURIComponent(name) +
+        '&phone=' + encodeURIComponent(phone) +
+        '&email=' + encodeURIComponent(email) +
+        '&service_type=' + encodeURIComponent(service) +
+        '&message=' + encodeURIComponent(message);
+    }
+
+    var done = false;
+    var timer = setTimeout(function () {
+      if (done) { return; }
+      done = true;
+      try { xhr.abort(); } catch (e) { /* ignore */ }
+      setSending(false);
+      showError(T.err);
+    }, TIMEOUT_MS);
+
+    function fail() {
+      if (done) { return; }
+      done = true;
+      clearTimeout(timer);
+      setSending(false);
+      showError(T.err);
+    }
+
+    xhr.onreadystatechange = function () {
+      if (xhr.readyState !== 4 || done) { return; }
+      var json = null;
+      try { json = JSON.parse(xhr.responseText); } catch (e) { json = null; }
+      if (xhr.status >= 200 && xhr.status < 300 && json && json.ok) {
+        done = true;
+        clearTimeout(timer);
+        setSending(false);
+        onSuccess();
+      } else {
+        fail();
+      }
+    };
+
+    setSending(true);
+    try {
+      xhr.open('POST', API_URL, true);
+      if (!useForm) { xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded'); }
+      xhr.send(body);
+    } catch (e) {
+      fail();
+    }
+  }
+
+  var formEl = $('form');
+  formEl.onsubmit = function (e) {
+    if (e && e.preventDefault) { e.preventDefault(); }
+    submit();
+    return false;
+  };
+
+  // ---------- старт ----------
+  applyTexts();
+  renderServices('');
+  loadServicesFromWp();
+
+  // Telegram SDK подключаем асинхронно и не ждём: форма работает и без него.
+  function initTelegram() {
+    try {
+      var app = window.Telegram && window.Telegram.WebApp;
+      if (app) {
+        app.ready();
+        if (app.expand) { app.expand(); }
+        var code = app.initDataUnsafe && app.initDataUnsafe.user && app.initDataUnsafe.user.language_code;
+        if (code && !/[?&]lang=/.test(window.location.search)) {
+          var next = String(code).toLowerCase().indexOf('ru') === 0 ? 'ru' : 'en';
+          if (next !== lang) {
+            var current = $('f-service').value;
+            lang = next;
+            T = TEXT[lang];
+            services = [];
+            var s;
+            for (s = 0; s < DEFAULT_SERVICES.length; s++) { services.push(DEFAULT_SERVICES[s][lang]); }
+            applyTexts();
+            renderServices(current);
+            loadServicesFromWp();
+          }
+        }
+      }
+    } catch (e) { /* ignore */ }
+  }
+  try {
+    var sdk = document.createElement('script');
+    sdk.src = 'https://telegram.org/js/telegram-web-app.js';
+    sdk.async = true;
+    sdk.onload = initTelegram;
+    document.getElementsByTagName('head')[0].appendChild(sdk);
+  } catch (e) { /* ignore */ }
+})();
+</script>
+</body>
+</html>
