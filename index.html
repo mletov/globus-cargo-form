@@ -27,6 +27,7 @@
   .consent input { float: left; width: 18px; height: 18px; margin: 2px 10px 0 0; }
   .consent span { display: block; overflow: hidden; }
   .error { display: none; margin-top: 12px; padding: 10px 12px; border-radius: 10px; background: #fef2f2; color: #b91c1c; font-size: 14px; }
+  .details { display: none; margin: 8px 0 0 0; padding: 10px 12px; border-radius: 10px; background: #0f172a; color: #e2e8f0; font-family: monospace; font-size: 11px; line-height: 1.45; white-space: pre-wrap; word-wrap: break-word; }
   button.send { display: block; width: 100%; margin-top: 14px; padding: 14px 12px; font-size: 16px; font-weight: bold; color: #fff; background: #0e5e99; border: 0; border-radius: 12px; cursor: pointer; }
   button.send[disabled] { opacity: 0.6; }
   .ok { display: none; padding: 28px 16px; text-align: center; background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; }
@@ -79,6 +80,7 @@ window.onerror = function (message, source, line) {
     <label class="consent"><input id="f-consent" type="checkbox"><span id="t-consent">Согласен на обработку персональных данных и получение ответа по заявке.</span></label>
 
     <div id="error" class="error"></div>
+    <pre id="details" class="details"></pre>
     <button id="send" type="submit" class="send">Отправить заявку</button>
   </form>
 
@@ -90,6 +92,7 @@ window.onerror = function (message, source, line) {
 (function () {
   var API_URL = 'https://api.globuscargo.net/sendmail.php';
   var WP_SERVICES_URL = 'https://api.globuscargo.net/wp-json/wp/v2/posts?categories=4&per_page=100&_fields=title,acf';
+  var WP_ROOT_URL = 'https://api.globuscargo.net/wp-json/';
   var TIMEOUT_MS = 45000;
   var MAX_FILE = 10 * 1024 * 1024;
   var FILE_EXT = ['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx', 'xls', 'xlsx'];
@@ -309,6 +312,60 @@ window.onerror = function (message, source, line) {
     var box = $('error');
     setText(box, message);
     box.style.display = message ? 'block' : 'none';
+    if (!message) { showDetails(''); }
+  }
+
+  // Подробности сбоя отправки показываем прямо на экране (на телефоне нет консоли).
+  function showDetails(text) {
+    var box = $('details');
+    setText(box, text);
+    box.style.display = text ? 'block' : 'none';
+  }
+
+  function hint(status) {
+    if (status === 0) {
+      return 'статус 0 = браузер не получил ответ. Частые причины: у sendmail.php нет заголовка Access-Control-Allow-Origin для этого домена (CORS), ' +
+        'недействительный/неполный сертификат у api.globuscargo.net на этом телефоне, нет интернета или соединение блокируется (VPN, фаервол, ограничения сети).';
+    }
+    if (status === 413) { return 'файл слишком большой для сервера (лимит upload/nginx client_max_body_size).'; }
+    if (status === 403 || status === 401) { return 'доступ запрещён: проверьте правила сервера/защиту от ботов для этого домена.'; }
+    if (status === 404) { return 'sendmail.php не найден по этому адресу.'; }
+    if (status >= 500) { return 'ошибка на стороне сервера (PHP/почта), смотрите лог сервера и тело ответа выше.'; }
+    if (status >= 400) { return 'сервер отклонил запрос, смотрите тело ответа выше.'; }
+    return 'ответ получен, но не в ожидаемом формате {"ok":true}.';
+  }
+
+  // Диагностический запрос: показывает, доступен ли сервер вообще и отдаёт ли он CORS-заголовок.
+  function probe(label, url, callback) {
+    var finished = false;
+    var req;
+    try { req = new XMLHttpRequest(); } catch (e) { callback('XMLHttpRequest недоступен'); return; }
+    var timer = setTimeout(function () {
+      if (finished) { return; }
+      finished = true;
+      try { req.abort(); } catch (e) { /* ignore */ }
+      callback('нет ответа за 10 с');
+    }, 10000);
+    req.onreadystatechange = function () {
+      if (req.readyState !== 4 || finished) { return; }
+      finished = true;
+      clearTimeout(timer);
+      var acao = null;
+      try { acao = req.getResponseHeader('Access-Control-Allow-Origin'); } catch (e) { acao = null; }
+      if (req.status === 0) {
+        callback('НЕТ ОТВЕТА (status 0): сеть недоступна, блок сертификата или нет CORS-заголовка');
+      } else {
+        callback('HTTP ' + req.status + ', Access-Control-Allow-Origin: ' + acao);
+      }
+    };
+    try {
+      req.open('GET', url, true);
+      req.send(null);
+    } catch (e) {
+      finished = true;
+      clearTimeout(timer);
+      callback('исключение: ' + e);
+    }
   }
 
   // ---------- отправка ----------
@@ -364,35 +421,103 @@ window.onerror = function (message, source, line) {
     }
 
     var done = false;
+    var startedAt = new Date().getTime();
+    var lastEvent = 'нет событий';
+    var thrown = '';
+
     var timer = setTimeout(function () {
       if (done) { return; }
-      done = true;
-      try { xhr.abort(); } catch (e) { /* ignore */ }
-      setSending(false);
-      showError(T.err);
+      fail('таймаут: нет ответа за ' + (TIMEOUT_MS / 1000) + ' с (клиентский таймаут)');
     }, TIMEOUT_MS);
 
-    function fail() {
+    function header(name) {
+      try { return xhr.getResponseHeader(name); } catch (e) { return null; }
+    }
+
+    function responseHeadersText() {
+      try {
+        var all = xhr.getAllResponseHeaders();
+        return all ? String(all).replace(/\s+$/, '') : '(пусто)';
+      } catch (e) { return '(недоступно: ' + e + ')'; }
+    }
+
+    function fail(reason) {
       if (done) { return; }
       done = true;
       clearTimeout(timer);
+      try { if (xhr.readyState !== 4) { xhr.abort(); } } catch (e) { /* ignore */ }
       setSending(false);
       showError(T.err);
+
+      var status = 0;
+      var statusText = '';
+      var responseText = '';
+      try { status = xhr.status; statusText = xhr.statusText; responseText = xhr.responseText || ''; } catch (e) { /* ignore */ }
+
+      var lines = [];
+      lines.push('ПРИЧИНА: ' + reason);
+      lines.push('Запрос: POST ' + API_URL);
+      lines.push('Страница: ' + window.location.href.split('#')[0]);
+      lines.push('Origin страницы: ' + (window.location.origin || (window.location.protocol + '//' + window.location.host)));
+      lines.push('HTTP-статус: ' + status + (statusText ? ' ' + statusText : ''));
+      lines.push('readyState: ' + xhr.readyState + ', последнее событие: ' + lastEvent);
+      if (thrown) { lines.push('Исключение: ' + thrown); }
+      lines.push('Время: ' + (new Date().getTime() - startedAt) + ' мс');
+      lines.push('Тип тела: ' + (useForm ? 'FormData (multipart)' : 'urlencoded'));
+      lines.push('Файл: ' + (file ? (file.name + ', ' + file.size + ' байт, type=' + (file.type || '?')) : 'нет'));
+      lines.push('Онлайн (navigator.onLine): ' + (typeof navigator.onLine === 'undefined' ? '?' : navigator.onLine));
+      lines.push('Access-Control-Allow-Origin: ' + header('Access-Control-Allow-Origin'));
+      lines.push('Content-Type ответа: ' + header('Content-Type'));
+      lines.push('Заголовки ответа:\n' + responseHeadersText());
+      lines.push('Тело ответа (первые 1000 символов):\n' + (responseText ? responseText.substring(0, 1000) : '(пусто)'));
+      lines.push('User-Agent: ' + navigator.userAgent);
+      lines.push('Подсказка: ' + hint(status));
+      lines.push('Проверка доступности API…');
+      showDetails(lines.join('\n'));
+
+      probe('GET ' + API_URL, API_URL, function (text) {
+        lines.pop();
+        lines.push('Проверка GET sendmail.php: ' + text);
+        lines.push('Проверка GET /wp-json/: …');
+        showDetails(lines.join('\n'));
+        probe('GET wp-json', WP_ROOT_URL, function (text2) {
+          lines.pop();
+          lines.push('Проверка GET /wp-json/: ' + text2);
+          showDetails(lines.join('\n'));
+        });
+      });
     }
 
     xhr.onreadystatechange = function () {
+      lastEvent = 'readystatechange(' + xhr.readyState + ')';
       if (xhr.readyState !== 4 || done) { return; }
+      // При сетевой ошибке/CORS браузер завершает запрос со статусом 0 — разбираем это в onerror/здесь.
       var json = null;
-      try { json = JSON.parse(xhr.responseText); } catch (e) { json = null; }
+      var parseError = '';
+      try { json = JSON.parse(xhr.responseText); } catch (e) { json = null; parseError = String(e); }
       if (xhr.status >= 200 && xhr.status < 300 && json && json.ok) {
         done = true;
         clearTimeout(timer);
         setSending(false);
         onSuccess();
+        return;
+      }
+      if (xhr.status === 0) {
+        // Даём шанс onerror/ontimeout сообщить точнее, затем показываем итог.
+        setTimeout(function () {
+          fail('запрос не дошёл до сервера или ответ заблокирован (сеть, CORS, сертификат, блокировка)');
+        }, 0);
+      } else if (xhr.status >= 200 && xhr.status < 300) {
+        fail('сервер ответил ' + xhr.status + ', но ответ не JSON с ok=true' + (parseError ? ' (' + parseError + ')' : (json && json.error ? ' (error: ' + json.error + ')' : '')));
       } else {
-        fail();
+        fail('сервер ответил ошибкой HTTP ' + xhr.status + (json && json.error ? ' (error: ' + json.error + ')' : ''));
       }
     };
+    xhr.onerror = function () { lastEvent = 'error'; };
+    xhr.ontimeout = function () { lastEvent = 'timeout'; };
+    xhr.onabort = function () { lastEvent = 'abort'; };
+    xhr.onloadstart = function () { lastEvent = 'loadstart'; };
+    xhr.onloadend = function () { if (lastEvent === 'loadstart') { lastEvent = 'loadend'; } };
 
     setSending(true);
     try {
@@ -400,7 +525,8 @@ window.onerror = function (message, source, line) {
       if (!useForm) { xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded'); }
       xhr.send(body);
     } catch (e) {
-      fail();
+      thrown = String(e && e.name ? e.name + ': ' + e.message : e);
+      fail('исключение при открытии/отправке запроса');
     }
   }
 
